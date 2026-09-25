@@ -166,6 +166,49 @@ def load_data(ticker: str, period: str, interval: str) -> pd.DataFrame:
     return df
 
 
+def load_data_with_fallback(symbols: list, period: str, interval: str):
+    """Try a list of candidate ticker symbols in order; return first that works.
+    Some Yahoo Finance forex/spot symbols (e.g. XAUUSD=X) intermittently
+    return an empty response, so we fall back to alternates automatically."""
+    for sym in symbols:
+        try:
+            df = load_data(sym, period, interval)
+            if not df.empty and len(df) >= 55:
+                return df, sym
+        except Exception:
+            continue
+    return pd.DataFrame(), None
+
+
+GRAMS_PER_TROY_OZ = 31.1034768
+
+
+@st.cache_data(ttl=900)
+def load_mcx_gold_synthetic(period: str, interval: str) -> pd.DataFrame:
+    """MCX Gold isn't directly available via Yahoo Finance/yfinance, so we
+    build an approximate ₹/10g series from COMEX Gold futures (GC=F, USD/oz)
+    converted through the USD-INR exchange rate. This tracks MCX Gold closely
+    but excludes import duty, GST and local premium — treat as an
+    approximation, not the exact MCX quote."""
+    gc = yf.download("GC=F", period=period, interval=interval, progress=False)
+    usdinr = yf.download("USDINR=X", period=period, interval=interval, progress=False)
+    if isinstance(gc.columns, pd.MultiIndex):
+        gc.columns = gc.columns.get_level_values(0)
+    if isinstance(usdinr.columns, pd.MultiIndex):
+        usdinr.columns = usdinr.columns.get_level_values(0)
+    if gc.empty or usdinr.empty:
+        return pd.DataFrame()
+    gc = gc.dropna(subset=[c for c in ["Open", "High", "Low", "Close"] if c in gc.columns])
+    rate = usdinr["Close"].reindex(gc.index).ffill().bfill()
+    factor = (10 / GRAMS_PER_TROY_OZ) * rate
+    synthetic = pd.DataFrame(index=gc.index)
+    for col in ["Open", "High", "Low", "Close"]:
+        synthetic[col] = gc[col] * factor
+    synthetic["Volume"] = gc["Volume"].fillna(0) if "Volume" in gc.columns else 0
+    synthetic = synthetic.dropna(subset=["Open", "High", "Low", "Close"])
+    return synthetic
+
+
 # ----------------------------- UI -----------------------------
 
 st.title("🥇 Gold Swing Trading Scanner")
@@ -179,7 +222,8 @@ GOLD_TICKERS = {
     "Micro Gold Futures (MGC=F)": "MGC=F",
     "SPDR Gold Shares ETF (GLD)": "GLD",
     "iShares Gold Trust (IAU)": "IAU",
-    "Gold Spot / USD (XAUUSD=X)": "XAUUSD=X",
+    "Gold Spot / USD (XAUUSD=X)": ["XAUUSD=X", "XAU=X", "GC=F"],
+    "MCX Gold ₹/10g (approx, via COMEX+USDINR)": "MCX_SYNTHETIC",
 }
 
 with st.sidebar:
@@ -204,7 +248,13 @@ data_cache = {}
 for name in selected_names:
     ticker = GOLD_TICKERS[name]
     try:
-        df = load_data(ticker, period, interval)
+        if ticker == "MCX_SYNTHETIC":
+            df = load_mcx_gold_synthetic(period, interval)
+        elif isinstance(ticker, list):
+            df, used_symbol = load_data_with_fallback(ticker, period, interval)
+        else:
+            df = load_data(ticker, period, interval)
+
         if df.empty or len(df) < 55:
             reason = "empty response" if df.empty else f"only {len(df)} rows (need ≥55)"
             rows.append({"Ticker": name, "Signal": f"NO DATA ({reason})", "Score": "-", "Price": "-",
@@ -305,4 +355,4 @@ st.caption(
     "Yeh financial advice nahi hai. Trading se pehle apni research karein ya "
     "SEBI-registered financial advisor se consult karein."
     )
-    
+        
