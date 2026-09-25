@@ -233,7 +233,12 @@ def color_signal(val):
     return ""
 
 
-st.dataframe(scan_df.style.applymap(color_signal, subset=["Signal"]), use_container_width=True)
+styler = scan_df.style
+if hasattr(styler, "map"):
+    styler = styler.map(color_signal, subset=["Signal"])
+else:
+    styler = styler.applymap(color_signal, subset=["Signal"])
+st.dataframe(styler, use_container_width=True)
 
 st.markdown("---")
 
@@ -293,4 +298,5 @@ st.caption(
     "⚠️ Disclaimer: Yeh tool sirf educational/informational purpose ke liye hai. "
     "Yeh financial advice nahi hai. Trading se pehle apni research karein ya "
     "SEBI-registered financial advisor se consult karein."
-)
+        )
+    
