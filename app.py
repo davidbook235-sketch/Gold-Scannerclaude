@@ -157,7 +157,12 @@ def load_data(ticker: str, period: str, interval: str) -> pd.DataFrame:
     df = yf.download(ticker, period=period, interval=interval, progress=False)
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
-    df = df.dropna()
+    # Forex/spot tickers (e.g. XAUUSD=X) often have no/NaN Volume data.
+    # Only require OHLC to be present; don't drop rows for missing Volume.
+    required_cols = [c for c in ["Open", "High", "Low", "Close"] if c in df.columns]
+    df = df.dropna(subset=required_cols)
+    if "Volume" in df.columns:
+        df["Volume"] = df["Volume"].fillna(0)
     return df
 
 
@@ -201,7 +206,8 @@ for name in selected_names:
     try:
         df = load_data(ticker, period, interval)
         if df.empty or len(df) < 55:
-            rows.append({"Ticker": name, "Signal": "NO DATA", "Score": "-", "Price": "-",
+            reason = "empty response" if df.empty else f"only {len(df)} rows (need ≥55)"
+            rows.append({"Ticker": name, "Signal": f"NO DATA ({reason})", "Score": "-", "Price": "-",
                          "RSI": "-", "Stop": "-", "Target": "-"})
             continue
         df_ind = compute_indicators(df)
@@ -298,5 +304,5 @@ st.caption(
     "⚠️ Disclaimer: Yeh tool sirf educational/informational purpose ke liye hai. "
     "Yeh financial advice nahi hai. Trading se pehle apni research karein ya "
     "SEBI-registered financial advisor se consult karein."
-        )
+    )
     
